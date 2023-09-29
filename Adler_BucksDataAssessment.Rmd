@@ -1,0 +1,172 @@
+---
+title: "Bucks Analyst Questionnaire"
+author: "Bill Adler"
+date: '2023-09-28'
+output: 
+  html_document:
+    code_folding: hide
+---
+
+```{r setup, include=FALSE}
+
+##Load Packages
+library(dplyr)
+library(ggplot2)
+library(ggthemes)
+library(stringr)
+library(tidyverse)
+library(tidyr)
+library(data.table)
+library(sqldf)
+library(reactable)
+library(plotly)
+
+#Load Data **Change File Path**
+df <- fread("C:\\Users\\Bill.Adler\\OneDrive - Milwaukee Bucks\\Desktop\\chances.csv")
+
+
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+### Question 1: Should we foul?
+
+In a game situation where we are up 3, on defense, and less than 24 seconds left in the game, coaches need to decide quickly whether or not they want to foul.  Using the data from the past three seasons, we can make some decisions based on different situations.
+
+First, let's take a look at game outcomes for when teams have fouled compared to when they decided to let the game play out.
+
+```{r, warning=FALSE}
+
+# Figure out how many games have have been won and lost when a foul or no foul was committed
+data <- sqldf("SELECT
+  SUM(CASE WHEN team_nba_def = team_nba_winner AND fouls_def IS NULL THEN 1 ELSE 0 END) as WonNoFoul,
+  SUM(CASE WHEN team_nba_def = team_nba_winner AND fouls_def IS NOT NULL THEN 1 ELSE 0 END) as WonFoul,
+  SUM(CASE WHEN team_nba_def <> team_nba_winner AND fouls_def IS NULL THEN 1 ELSE 0 END) as LostNoFoul,
+  SUM(CASE WHEN team_nba_def <> team_nba_winner AND fouls_def IS NOT NULL THEN 1 ELSE 0 END) as LostFoul
+FROM df")
+
+data$WonNoFoul <- as.numeric(data$WonNoFoul)
+data$WonFoul <- as.numeric(data$WonFoul)
+data$LostNoFoul <- as.numeric(data$LostNoFoul)
+data$LostFoul <- as.numeric(data$LostFoul)
+reactable(data)
+
+data$NoFoul <- round((data$WonNoFoul / (data$WonNoFoul + data$LostNoFoul) * 100), digits = 1)
+data$Foul <- round((data$WonFoul / (data$WonFoul + data$LostFoul) * 100), digits = 1)
+
+a <- data[,c(5:6)]
+WP <- gather(a, key = "Decision", value = "WinPct")
+
+#plot results
+Plot1 <- ggplot(WP, aes(fill=Decision, y=WinPct, x=Decision)) + 
+  geom_bar(position='dodge', stat='identity') +
+  ylim(0,100) +
+  labs(x='Decision', y='Win Percentage', title='Win Percentage Based On Foul Decision') +
+  theme(plot.title = element_text(hjust=0.5, size=20, face='bold')) +
+  theme_fivethirtyeight()+
+  scale_fill_manual(values=c('#00471B', '#0077C0')) +
+  geom_text(aes(label= WinPct, y = WinPct + 1.5), color="black",
+            position = position_dodge(.9), size=3.5)
+ggplotly(Plot1)
+
+```
+
+Without looking at any of the finer details, the defending team has a 90% chance of winning whether they foul or not.  Since the vast majority of teams don't foul, this may lead to a recommendation of not to foul.  In a vacuum, this would likely be my recommendation, as well.  But if we look at some of the situational data, there may be times when fouling gives us a slightly better advantage.
+
+First, let's take a look at foul situation.  Particularly, when the defending team has a foul to give and decides to use that foul.
+
+```{r, warning=FALSE}
+
+# When there is a foul to give
+data2 <- sqldf("SELECT
+  SUM(CASE WHEN team_nba_def = team_nba_winner AND fouls_def IS NULL THEN 1 ELSE 0 END) as WonNoFoul,
+  SUM(CASE WHEN team_nba_def = team_nba_winner AND fouls_def IS NOT NULL THEN 1 ELSE 0 END) as WonFoul,
+  SUM(CASE WHEN team_nba_def <> team_nba_winner AND fouls_def IS NULL THEN 1 ELSE 0 END) as LostNoFoul,
+  SUM(CASE WHEN team_nba_def <> team_nba_winner AND fouls_def IS NOT NULL THEN 1 ELSE 0 END) as LostFoul
+FROM df
+where fouls_def >= 1 and fouls_def_shooting =0")
+
+data2$WinPct <- round((data2$WonFoul / (data2$WonFoul + data2$LostFoul) * 100), digits = 1)
+
+reactable(data2)
+
+```
+While the sample size is somewhat limited, the defending team increases there chance of winning by about 4% when they use their fouls that they have to give.  Using these fouls slows the game down a bit, but it allows time to run off the clock before the offensive team has to reset.  At the same time, it allows the defensive team to get the correct personnel in the game to create ideal defensive matchups.  The one caveat to this strategy, however, is that you cannot make the mistake of committing a shooting foul.  You must commit the foul before the offensive player is in the act of shooting.
+
+Not all shots are created equally, so another data point we can look at is shot quality.  Depending on how the 'chance' starts, does the offensive team have a better chance of scoring?
+
+```{r, warning=FALSE}
+
+# Shot quality breakdown
+data3 <- sqldf("SELECT Case When startType = 'DEFOB' then 'Defensive Out of Bounds' 
+when starttype =  'FGDRB' then 'Field Goal Defensive Rebound'
+When startType = 'FGORB' then 'Field Goal Offensive Rebound'
+When startType = 'FTDRB' then 'Free Throw Defensive Rebound'
+WHen startType = 'FTORB' then 'Free Throw Offensive Rebound'
+When startType =  'SLOB' then 'Sideline Out of Bounds'
+When startType = 'BLOB' then 'Baseline Out of Bounds' 
+When startType = 'FTLINE' then 'Free Throw Line (loose ball foul in the bonus)'
+When startType =  'JMP' then 'Jump Ball'
+When startType = 'TO' then 'Live Ball Turnover' 
+when startType = 'FTM' then 'Free Throw Made' 
+when startType = 'FGM' then 'Field Goal Made' Else startType End as StartType
+  , AVG(shot_qSP) as AvgShotQuality
+From df
+Group by StartType
+Order by AvgShotQuality")
+reactable(data3, defaultPageSize = 20)
+
+
+```
+Opponents create their most quality shots when they force a live ball turnover.  This makes sense because the team that committed the turnover is unlikely to be in a good defensive position as the opponent goes into a transition offense.
+
+The sample size for this situation is very small, but the results still indicate that this may be a situation where you may want to foul.  By fouling, you are able to stop the offenses momentum and kill their transition offense.  When the opposing team gains possession off of a live ball turnover, the chance of winning drops to about 77%. 
+
+
+```{r, warning=FALSE}
+# Shot quality breakdown
+data4 <- sqldf("SELECT
+  SUM(CASE WHEN team_nba_def = team_nba_winner AND fouls_def IS NULL THEN 1 ELSE 0 END) as WonNoFoul,
+  SUM(CASE WHEN team_nba_def = team_nba_winner AND fouls_def IS NOT NULL THEN 1 ELSE 0 END) as WonFoul,
+  SUM(CASE WHEN team_nba_def <> team_nba_winner AND fouls_def IS NULL THEN 1 ELSE 0 END) as LostNoFoul,
+  SUM(CASE WHEN team_nba_def <> team_nba_winner AND fouls_def IS NOT NULL THEN 1 ELSE 0 END) as LostFoul
+FRom df
+where startType  ='TO'")
+
+data4$WinPct <- round(((data4$WonFoul + data4$WonNoFoul) / (data4$WonFoul + data4$WonNoFoul + data4$LostNoFoul) * 100), digits = 1)
+
+reactable(data4)
+
+```
+
+In summary, when you are up 3, on defense, and less than 24 seconds on the clock, on average you win the game about 90% of the time.  However, there are a few situations where fouling may increase your chance of winning.  If you have a foul to give and you use it, your chance of winning goes up about 4%.  Additionally, limited data suggests that your chances of winning significantly drop when the opponent gains possession by forcing a live ball turnover. Fouling in this situation may help reset the overall odds of winning the game back to 90%.
+
+```{r, warning=FALSE}
+
+#Visualize last two scenarios
+
+data5 <- rbind(data2, data4)
+data5$Situation <- c("Using Foul To Give", "Opp Gains Poss Off Turnover")
+
+#plot results
+Plot2 <- ggplot(data5, aes(fill=Situation, y=WinPct, x=Situation)) + 
+  geom_bar(position='dodge', stat='identity') +
+  ylim(0,100) +
+  labs(x='Situation', y='Win Percentage', title='Situational Win Pct') +
+  theme(plot.title = element_text(hjust=0.5, size=20, face='bold')) +
+  theme_fivethirtyeight()+
+  scale_fill_manual(values=c('#00471B', '#0077C0')) +
+  geom_text(aes(label= WinPct, y = WinPct + 1.5), color="black",
+            position = position_dodge(.9), size=3.5)
+ggplotly(Plot2)
+
+```
+
+The analysis of this game scenario could be vastly improved with a more robust dataset.  Knowing the opponent and who is on the floor for both teams could change the strategy.  For instance, if we are playing the Warriors and Steph Curry is in the game, you might take your chances with fouling early in the possession, eliminating an opportunity for Curry to take a three.  Additionally, if we only have players available that are not particularly great a free throws, we would not want to foul. It is likely that the opposing team will foul us after their free throws, and we wouldn't want low percentage shooters at the line to preserve the game.  Additionally, more complex statistical analysis could be done with more precise play-by-play data or with more variables.  With more variables, we could run PCA models to determine which variables have the most impact on game outcome.  With better play-by-play data, decision tree models could be created to help determine what to do in more specific situations.
+
+
+### Question 2: Problem to solve
+
+If given access to a team’s NBA database, I would like to investigate lineup and rotation optimization.  With the league’s new rules on resting players, it will be important to create ways for players to rest, even when they must play.  Figuring out minutes distribution strategies and rotation patterns could go a long way in limiting player fatigue.  It is well documented that fatigue is a leading cause of injury and there is a reason why load management has become so important in the NBA.  The teams that can figure out an effective strategy, given the new rules, will have a competitive advantage as the playoffs approach if they are able to put a healthy lineup on the floor every night.  There are a few ways to approach this issue.  The first would be to use player tracking data.  This would be done using league-approved wearables where we could monitor in-game workload.  If players were willing, we could also use wearable technology when they are off the court, like Oura rings, to gain insight into sleep patterns.  Additionally, the NBA has installed Hawk-Eye systems into every arena this year.  It will be important to verify the validity of this data but using it to help determine player fatigue could be one of the many uses of this technology.  Hawk-Eye is supposed to be able to provide biomechanical data, as well.  If the data has enough precision, it will be possible to pick up on player fatigue based on how they are moving in-game.  My graduate research focused on biomechanical data analysis, so I would be able to provide expertise in this area.
+
+Another way to approach this issue is to figure out how to provide more minutes to players at the end of the bench so other players can get more rest.  It will be important to find the right situations to utilize different lineups without sacrificing too much efficiency on the floor.  The right combination of players could be determined by who the opponent is and who they have on the floor, or simply by whose skillsets complement each other the best on our team.  Lastly, finding the right times throughout the year to utilize these strategies will be key.  Part of the new rule is centered around nationally televised games.  With the Bucks being a top team in the league, there are a lot more nationally televised games to work around.  A road map for the entire season should be laid out for each player, knowing that adjustments will need to be made throughout the season.
+
